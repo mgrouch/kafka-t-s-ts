@@ -1,7 +1,7 @@
 
 ```java
 
-enum Side {
+enum Dir {
     D, R
 }
 
