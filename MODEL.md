@@ -27,6 +27,6 @@ process(event):
   if event is S:
       put S into sById
       add S.id to openSByPid[pid] if (S.q - S.qs) > 0
-      for each openT.id in openTradesByPid[pid] in business order:
+      for each openT.id in openTByPid[pid] in order by offset:
           emit TS
 ```
