@@ -1,2 +1,4 @@
 package com.example.txcache.app.domain;
-public record SEntity(String id,String status) {}
+
+public record SEntity(String id, String status) {
+}
