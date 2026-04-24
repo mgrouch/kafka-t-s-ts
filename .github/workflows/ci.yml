@@ -1,0 +1,42 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17, cache: maven }
+      - run: mvn -B -DskipTests clean package
+      - run: docker compose up -d kafka
+      - run: |
+          for i in {1..30}; do docker compose exec -T kafka sh -lc "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list" && exit 0; sleep 5; done
+          docker compose logs kafka; exit 1
+      - run: |
+          docker compose exec -T kafka sh -lc "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic input-event --partitions 6 --replication-factor 1"
+          docker compose exec -T kafka sh -lc "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic processed-event --partitions 6 --replication-factor 1"
+      - run: docker compose up -d --build app
+      - run: sleep 20
+      - run: |
+          cat > sample.json <<'JSON'
+          {"eventId":"evt-1","eventTime":"2026-04-22T16:00:00Z","entity":{"productId":"p-100","entityId":"t-1","kind":"T","tValue":{"id":"t-1","name":"name-1","quantity":10},"sValue":null,"tsValue":null,"tombstone":false}}
+          {"eventId":"evt-2","eventTime":"2026-04-22T16:00:01Z","entity":{"productId":"p-100","entityId":"s-1","kind":"S","tValue":null,"sValue":{"id":"s-1","status":"OPEN"},"tsValue":null,"tombstone":false}}
+          JSON
+          docker cp sample.json "$(docker compose ps -q kafka)":/tmp/sample.json
+          docker compose exec -T kafka sh -lc 'awk '"'"'{print "p-100|" $0}'"'"' /tmp/sample.json | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka:9092 --topic input-event --property parse.key=true --property key.separator="|"'
+      - run: sleep 20
+      - if: always()
+        run: docker compose logs app
+      - if: always()
+        run: |
+          docker compose exec -T kafka sh -lc '/opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka:9092 --topic input-event || true'
+          docker compose exec -T kafka sh -lc '/opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka:9092 --topic processed-event || true'
+      - run: |
+          docker compose exec -T kafka sh -lc '
+            : > /tmp/out.txt
+            /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic processed-event --from-beginning --timeout-ms 10000 > /tmp/out.txt 2>/dev/null || true
+            cat /tmp/out.txt
+            test "$(wc -l < /tmp/out.txt)" -ge 2
+          '
+      - if: always()
+        run: docker compose down -v
